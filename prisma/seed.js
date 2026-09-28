@@ -1,25 +1,24 @@
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("🌱 Starting database seed...");
+  console.log("🌱 Checking database seed...");
 
-  // 1. Clean existing records (optional for clean seed)
-  await prisma.attendance.deleteMany();
-  await prisma.workplaceQRCode.deleteMany();
-  await prisma.workplace.deleteMany();
-  await prisma.employee.deleteMany();
-  await prisma.department.deleteMany();
-  await prisma.user.deleteMany();
+  const userCount = await prisma.user.count();
+  if (userCount > 0) {
+    console.log("ℹ️ Users already exist in database. Skipping seed.");
+    return;
+  }
 
-  // 2. Hash default passwords
+  console.log("🚀 Empty database detected. Seeding initial admin and demo data...");
+
+  // Hash default passwords
   const adminPasswordHash = await bcrypt.hash("Admin@123", 10);
   const employeePasswordHash = await bcrypt.hash("Employee@123", 10);
 
-  // 3. Create Admin User
+  // 1. Create Admin User
   const adminUser = await prisma.user.create({
     data: {
       email: "admin@geopresence.com",
@@ -30,7 +29,7 @@ async function main() {
   });
   console.log(`✅ Admin created: admin@geopresence.com / Admin@123 (ID: ${adminUser.id})`);
 
-  // 4. Create Departments
+  // 2. Create Departments
   const deptEngineering = await prisma.department.create({
     data: {
       name: "Engineering",
@@ -46,9 +45,8 @@ async function main() {
       status: "ACTIVE",
     },
   });
-  console.log(`✅ Departments created: Engineering (${deptEngineering.id}), HR (${deptHR.id})`);
 
-  // 5. Create 5 Employees
+  // 3. Create 5 Employees
   const employeesData = [
     {
       employeeId: "EMP001",
@@ -109,40 +107,30 @@ async function main() {
         status: "ACTIVE",
       },
     });
-    console.log(`  👤 Employee created: ${emp.name} (${emp.email} / Employee@123)`);
   }
 
-  // 6. Create Workplace
+  // 4. Create Workplace & QR Code
   const workplace = await prisma.workplace.create({
     data: {
       name: "HQ Tech Park",
-      latitude: 12.971598, // Bengaluru HQ
+      latitude: 12.971598,
       longitude: 77.594562,
       radiusMeters: 100.0,
       maxGpsAccuracyMeters: 100.0,
       status: "ACTIVE",
     },
   });
-  console.log(`✅ Workplace created: HQ Tech Park (${workplace.id})`);
 
-  // 7. Create Workplace QR Code
   const qrToken = "sample-qr-token-hq-tech-park-2026";
-  const qrCode = await prisma.workplaceQRCode.create({
+  await prisma.workplaceQRCode.create({
     data: {
       workplaceId: workplace.id,
       token: qrToken,
       active: true,
     },
   });
-  console.log(`✅ Workplace QR Code created: ${qrToken}`);
 
-  console.log("\n🎉 Database seed finished successfully!");
-  console.log("-----------------------------------------");
-  console.log("Sample Login Credentials:");
-  console.log("  Admin:    admin@geopresence.com / Admin@123");
-  console.log("  Employee: rahul@geopresence.com / Employee@123");
-  console.log("  Check-In URL: /check-in?token=" + qrToken);
-  console.log("-----------------------------------------");
+  console.log("🎉 Database seed completed successfully!");
 }
 
 main()
