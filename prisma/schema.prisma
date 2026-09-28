@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  INVALID
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(EMPLOYEE)
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  employee     Employee?
+
+  @@map("users")
+}
+
+model Department {
+  id           String     @id @default(uuid())
+  name         String
+  organization String     @default("GEOPresence Corp")
+  status       Status     @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  employees    Employee[]
+
+  @@map("departments")
+}
+
+model Employee {
+  id           String       @id @default(uuid())
+  employeeId   String       @unique
+  userId       String       @unique
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  departmentId String
+  department   Department   @relation(fields: [departmentId], references: [id])
+  organization String       @default("GEOPresence Corp")
+  email        String       @unique
+  mobileNumber String
+  status       Status       @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  attendances  Attendance[]
+
+  @@index([employeeId])
+  @@map("employees")
+}
+
+model Workplace {
+  id                   String            @id @default(uuid())
+  name                 String
+  latitude             Float
+  longitude            Float
+  radiusMeters         Float             @default(100.0)
+  maxGpsAccuracyMeters Float             @default(100.0)
+  status               Status            @default(ACTIVE)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  qrCodes              WorkplaceQRCode[]
+  attendances          Attendance[]
+
+  @@map("workplaces")
+}
+
+model WorkplaceQRCode {
+  id          String       @id @default(uuid())
+  workplaceId String
+  workplace   Workplace    @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+  token       String       @unique
+  expiresAt   DateTime?
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  attendances Attendance[]
+
+  @@index([token])
+  @@map("workplace_qr_codes")
+}
+
+model Attendance {
+  id                          String           @id @default(uuid())
+  employeeId                  String
+  employee                    Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workplaceId                 String
+  workplace                   Workplace        @relation(fields: [workplaceId], references: [id])
+  date                        String
+  checkInTime                 DateTime         @default(now())
+  latitude                    Float
+  longitude                   Float
+  gpsAccuracyMeters           Float
+  distanceFromWorkplaceMeters Float
+  qrCodeId                    String?
+  qrCode                      WorkplaceQRCode? @relation(fields: [qrCodeId], references: [id])
+  status                      AttendanceStatus @default(PRESENT)
+  createdAt                   DateTime         @default(now())
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@index([workplaceId])
+  @@index([date])
+  @@index([checkInTime])
+  @@map("attendances")
+}
