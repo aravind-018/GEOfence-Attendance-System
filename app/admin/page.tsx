@@ -156,11 +156,13 @@ export default async function AdminDashboardPage() {
                   {recentCheckIns.map((rec) => (
                     <tr key={rec.id} className="hover:bg-slate-50/80 transition">
                       <td className="px-5 py-3.5">
-                        <div className="font-bold text-slate-900">{rec.employee.name}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">{rec.employee.employeeId}</div>
+                        <div className="font-bold text-slate-900">{rec.name || rec.employee?.name || "Attendee"}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {rec.employeeCode || rec.employee?.employeeId || "Public Entry"}
+                        </div>
                       </td>
                       <td className="px-5 py-3.5 text-slate-700 font-medium">
-                        {rec.employee.department.name}
+                        {rec.departmentName || rec.employee?.department?.name || "-"}
                       </td>
                       <td className="px-5 py-3.5 text-slate-800 font-semibold">{rec.workplace.name}</td>
                       <td className="px-5 py-3.5 text-slate-700 font-medium">

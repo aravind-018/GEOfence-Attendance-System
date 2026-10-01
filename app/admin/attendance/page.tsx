@@ -174,9 +174,15 @@ export default function AdminAttendancePage() {
                   {records.map((r) => (
                     <tr key={r.id} className="hover:bg-slate-50/80 transition">
                       <td className="px-4 py-3 font-mono font-medium text-slate-900">{r.date}</td>
-                      <td className="px-4 py-3 font-mono font-bold text-sky-700">{r.employee?.employeeId}</td>
-                      <td className="px-4 py-3 font-bold text-slate-900">{r.employee?.name}</td>
-                      <td className="px-4 py-3 text-slate-700 font-medium">{r.employee?.department?.name}</td>
+                      <td className="px-4 py-3 font-mono font-bold text-sky-700">
+                        {r.employeeCode || r.employee?.employeeId || "-"}
+                      </td>
+                      <td className="px-4 py-3 font-bold text-slate-900">
+                        {r.name || r.employee?.name || "Attendee"}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700 font-medium">
+                        {r.departmentName || r.employee?.department?.name || "-"}
+                      </td>
                       <td className="px-4 py-3 font-semibold text-slate-800">{r.workplace?.name}</td>
                       <td className="px-4 py-3 text-slate-700 font-medium">{formatKolkataTime(r.checkInTime)}</td>
                       <td className="px-4 py-3 text-slate-600 font-mono">{r.distanceFromWorkplaceMeters} m</td>

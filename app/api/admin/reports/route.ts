@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const exportCsv = searchParams.get("export") === "true";
-    const reportType = searchParams.get("type") || "daily"; // daily, monthly, department, workplace
+    const reportType = searchParams.get("type") || "daily";
     const date = searchParams.get("date") || "";
     const departmentId = searchParams.get("departmentId") || "";
     const workplaceId = searchParams.get("workplaceId") || "";
@@ -20,7 +20,12 @@ export async function GET(req: NextRequest) {
     const whereClause: any = {};
     if (date) whereClause.date = date;
     if (workplaceId) whereClause.workplaceId = workplaceId;
-    if (departmentId) whereClause.employee = { departmentId };
+    if (departmentId) {
+      whereClause.OR = [
+        { employee: { departmentId } },
+        { departmentName: { contains: departmentId, mode: "insensitive" } },
+      ];
+    }
 
     const records = await prisma.attendance.findMany({
       where: whereClause,
@@ -34,38 +39,78 @@ export async function GET(req: NextRequest) {
     });
 
     if (exportCsv) {
-      // Build Excel-compatible CSV string with BOM (\uFEFF)
+      // Find all custom keys present in formData objects
+      const customKeysSet = new Set<string>();
+      const standardKeys = ["fullName", "name", "email", "mobileNumber", "mobile", "departmentName", "department", "organization", "employeeCode", "employeeId"];
+
+      records.forEach((r) => {
+        if (r.formData && typeof r.formData === "object") {
+          Object.keys(r.formData as Record<string, any>).forEach((k) => {
+            if (!standardKeys.includes(k)) {
+              customKeysSet.add(k);
+            }
+          });
+        }
+      });
+
+      const customKeys = Array.from(customKeysSet);
+
+      // Standard Headers
       const headers = [
         "Attendance ID",
-        "Employee ID",
-        "Employee Name",
-        "Department",
-        "Organization",
-        "Workplace",
         "Date",
         "Check-In Time (IST)",
+        "Workplace",
+        "Full Name",
+        "Email",
+        "Mobile Number",
+        "Department",
+        "Organization",
+        "Employee ID / Code",
+        ...customKeys.map((k) => `"${k.replace(/([A-Z])/g, " $1").trim()}"`),
         "Latitude",
         "Longitude",
         "GPS Accuracy (m)",
-        "Distance from Workplace (m)",
+        "Distance (m)",
         "Status",
       ];
 
-      const rows = records.map((r) => [
-        `"${r.id}"`,
-        `"${r.employee.employeeId}"`,
-        `"${r.employee.name.replace(/"/g, '""')}"`,
-        `"${r.employee.department.name.replace(/"/g, '""')}"`,
-        `"${r.employee.organization.replace(/"/g, '""')}"`,
-        `"${r.workplace.name.replace(/"/g, '""')}"`,
-        `"${r.date}"`,
-        `"${formatKolkataDateTime(r.checkInTime)}"`,
-        r.latitude,
-        r.longitude,
-        r.gpsAccuracyMeters,
-        r.distanceFromWorkplaceMeters,
-        `"${r.status}"`,
-      ]);
+      const rows = records.map((r) => {
+        const formDataObj = (r.formData as Record<string, any>) || {};
+
+        const nameVal = r.name || r.employee?.name || formDataObj.fullName || "";
+        const emailVal = r.email || r.employee?.email || formDataObj.email || "";
+        const mobileVal = r.mobileNumber || r.employee?.mobileNumber || formDataObj.mobileNumber || "";
+        const deptVal = r.departmentName || r.employee?.department?.name || formDataObj.departmentName || "";
+        const orgVal = r.organization || r.employee?.organization || formDataObj.organization || "";
+        const codeVal = r.employeeCode || r.employee?.employeeId || formDataObj.employeeCode || "";
+
+        const customVals = customKeys.map((k) => {
+          const val = formDataObj[k];
+          if (val === undefined || val === null) return '""';
+          if (Array.isArray(val)) return `"${val.join("; ").replace(/"/g, '""')}"`;
+          return `"${String(val).replace(/"/g, '""')}"`;
+        });
+
+        return [
+          `"${r.id}"`,
+          `"${r.date}"`,
+          `"${formatKolkataDateTime(r.checkInTime)}"`,
+          `"${r.workplace.name.replace(/"/g, '""')}"`,
+          `"${nameVal.replace(/"/g, '""')}"`,
+          `"${emailVal.replace(/"/g, '""')}"`,
+          `"${mobileVal.replace(/"/g, '""')}"`,
+          `"${deptVal.replace(/"/g, '""')}"`,
+          `"${orgVal.replace(/"/g, '""')}"`,
+          `"${codeVal.replace(/"/g, '""')}"`,
+          ...customVals,
+          r.latitude,
+          r.longitude,
+          r.gpsAccuracyMeters,
+          r.distanceFromWorkplaceMeters,
+          `"${r.status}"`,
+        ];
+      });
 
       const csvContent =
         "\uFEFF" + [headers.join(","), ...rows.map((row) => row.join(","))].join("\n");

@@ -84,6 +84,7 @@ model Workplace {
 
   qrCodes              WorkplaceQRCode[]
   attendances          Attendance[]
+  formFields           FormField[]
 
   @@map("workplaces")
 }
@@ -104,10 +105,30 @@ model WorkplaceQRCode {
   @@map("workplace_qr_codes")
 }
 
+model FormField {
+  id              String     @id @default(uuid())
+  workplaceId     String?
+  workplace       Workplace? @relation(fields: [workplaceId], references: [id], onDelete: Cascade)
+  label           String
+  key             String     // Stable internal key e.g. "purposeOfVisit"
+  type            String     // TEXT, NUMBER, EMAIL, PHONE, DATE, DROPDOWN, RADIO, CHECKBOX, LONGTEXT
+  placeholder     String?
+  helpText        String?
+  required        Boolean    @default(true)
+  active          Boolean    @default(true)
+  displayOrder    Int        @default(0)
+  options         Json?      // List of option strings for DROPDOWN, RADIO, CHECKBOX
+  isDefault       Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@map("form_fields")
+}
+
 model Attendance {
   id                          String           @id @default(uuid())
-  employeeId                  String
-  employee                    Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employeeId                  String?
+  employee                    Employee?        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   workplaceId                 String
   workplace                   Workplace        @relation(fields: [workplaceId], references: [id])
   date                        String
@@ -119,9 +140,18 @@ model Attendance {
   qrCodeId                    String?
   qrCode                      WorkplaceQRCode? @relation(fields: [qrCodeId], references: [id])
   status                      AttendanceStatus @default(PRESENT)
+  
+  // Public attendee form fields
+  name                        String?
+  email                       String?
+  mobileNumber                String?
+  departmentName              String?
+  organization                String?
+  employeeCode                String?
+  formData                    Json?            // Dynamic custom form responses key-value pair
+
   createdAt                   DateTime         @default(now())
 
-  @@unique([employeeId, date])
   @@index([employeeId])
   @@index([workplaceId])
   @@index([date])

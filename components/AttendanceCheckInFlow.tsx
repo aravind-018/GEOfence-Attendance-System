@@ -1,19 +1,16 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import {
   MapPin,
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  Building,
-  User,
-  Mail,
-  Phone,
   ShieldCheck,
   Clock,
   Navigation,
+  FileText,
+  Send,
 } from "lucide-react";
 import { formatKolkataDateTime, formatKolkataTime } from "@/lib/utils/date";
 
@@ -22,11 +19,6 @@ interface AttendanceCheckInFlowProps {
 }
 
 export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowProps) {
-  const router = useRouter();
-
-  const [loadingAuth, setLoadingAuth] = useState(true);
-  const [currentUser, setCurrentUser] = useState<any>(null);
-
   const [locState, setLocState] = useState<"IDLE" | "REQUESTING" | "DETECTED" | "ERROR">("IDLE");
   const [locationError, setLocationError] = useState<string | null>(null);
 
@@ -40,36 +32,15 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
   const [validationResult, setValidationResult] = useState<any>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // Dynamic Form State
+  const [formFields, setFormFields] = useState<any[]>([]);
+  const [formData, setFormData] = useState<Record<string, any>>({});
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
   const [checkingIn, setCheckingIn] = useState(false);
   const [checkInSuccess, setCheckInSuccess] = useState<any>(null);
 
-  // 1. Authenticate user on mount
-  useEffect(() => {
-    async function checkAuth() {
-      try {
-        const res = await fetch("/api/auth/me");
-        const data = await res.json();
-        if (data.authenticated && data.user) {
-          setCurrentUser(data.user);
-        } else {
-          // Redirect to login with callback URL
-          const callback = encodeURIComponent(`/check-in?token=${token}`);
-          router.push(`/login?callbackUrl=${callback}`);
-        }
-      } catch {
-        const callback = encodeURIComponent(`/check-in?token=${token}`);
-        router.push(`/login?callbackUrl=${callback}`);
-      } finally {
-        setLoadingAuth(false);
-      }
-    }
-
-    if (token) {
-      checkAuth();
-    }
-  }, [token, router]);
-
-  // 2. Request Geolocation
+  // 1. Request Geolocation
   const requestLocation = useCallback(() => {
     setLocState("REQUESTING");
     setLocationError(null);
@@ -117,14 +88,14 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
     );
   }, []);
 
-  // Auto request location when user is authenticated
+  // Auto request location on mount
   useEffect(() => {
-    if (currentUser && !coords && locState === "IDLE") {
+    if (!coords && locState === "IDLE") {
       requestLocation();
     }
-  }, [currentUser, coords, locState, requestLocation]);
+  }, [coords, locState, requestLocation]);
 
-  // 3. Validate Location against Server
+  // 2. Validate Location & Fetch Form Fields from Server
   const validateWithServer = useCallback(
     async (lat: number, lon: number, accuracy: number) => {
       setValidating(true);
@@ -148,6 +119,19 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
           setValidationResult(data);
         } else {
           setValidationResult(data);
+          if (data.formFields) {
+            setFormFields(data.formFields);
+            // Pre-populate initial form data state
+            const initial: Record<string, any> = {};
+            data.formFields.forEach((f: any) => {
+              if (f.type === "CHECKBOX") {
+                initial[f.key] = [];
+              } else {
+                initial[f.key] = "";
+              }
+            });
+            setFormData(initial);
+          }
         }
       } catch (e) {
         setValidationError("Network error validating location.");
@@ -164,9 +148,50 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
     }
   }, [locState, coords, validateWithServer]);
 
-  // 4. Perform Check-In
-  const handleCheckIn = async () => {
+  // Handle Input Changes
+  const handleInputChange = (key: string, value: any) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    if (formErrors[key]) {
+      setFormErrors((prev) => ({ ...prev, [key]: "" }));
+    }
+  };
+
+  const handleCheckboxToggle = (key: string, option: string) => {
+    setFormData((prev) => {
+      const currentList: string[] = Array.isArray(prev[key]) ? prev[key] : [];
+      if (currentList.includes(option)) {
+        return { ...prev, [key]: currentList.filter((item) => item !== option) };
+      } else {
+        return { ...prev, [key]: [...currentList, option] };
+      }
+    });
+  };
+
+  // 3. Submit Attendance Form
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!coords || !token) return;
+
+    // Client-side quick check
+    const errors: Record<string, string> = {};
+    formFields.forEach((field) => {
+      if (field.required) {
+        const val = formData[field.key];
+        if (
+          val === undefined ||
+          val === null ||
+          (typeof val === "string" && val.trim() === "") ||
+          (Array.isArray(val) && val.length === 0)
+        ) {
+          errors[field.key] = `${field.label} is required.`;
+        }
+      }
+    });
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
 
     setCheckingIn(true);
     setValidationError(null);
@@ -180,13 +205,14 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
           latitude: coords.latitude,
           longitude: coords.longitude,
           gpsAccuracyMeters: coords.accuracy,
+          formData,
         }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setValidationError(data.error || "Check-in failed.");
+        setValidationError(data.error || "Form submission failed.");
         if (data.geofence) {
           setValidationResult((prev: any) => ({ ...prev, geofence: data.geofence }));
         }
@@ -200,15 +226,6 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
     }
   };
 
-  if (loadingAuth) {
-    return (
-      <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-slate-600 font-medium text-sm">Verifying Employee Session...</p>
-      </div>
-    );
-  }
-
   if (!token) {
     return (
       <div className="max-w-md mx-auto my-8 p-6 bg-white rounded-xl shadow border border-slate-200 text-center">
@@ -221,7 +238,7 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
     );
   }
 
-  // Success Screen
+  // SUCCESS SCREEN
   if (checkInSuccess) {
     const { attendance } = checkInSuccess;
     return (
@@ -230,16 +247,21 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
           <CheckCircle2 className="w-10 h-10" />
         </div>
 
-        <h2 className="text-2xl font-extrabold text-slate-900 mb-1">Check-In Successful!</h2>
+        <h2 className="text-2xl font-extrabold text-slate-900 mb-1">Attendance Recorded Successfully!</h2>
         <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-6">
-          Attendance Marked & Verified ✓
+          Location Verified & Form Submitted ✓
         </p>
 
-        {/* Details Card */}
+        {/* Summary Details */}
         <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 text-left space-y-2.5 text-xs text-slate-700 mb-6">
           <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
             <span className="text-slate-500 font-medium">Workplace</span>
             <span className="font-bold text-slate-900">{attendance.workplaceName}</span>
+          </div>
+
+          <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+            <span className="text-slate-500 font-medium">Submitted Name</span>
+            <span className="font-bold text-slate-900">{attendance.name}</span>
           </div>
 
           <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
@@ -248,37 +270,26 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
           </div>
 
           <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-            <span className="text-slate-500 font-medium">Employee Name</span>
-            <span className="font-bold text-slate-900">{attendance.employee.name}</span>
-          </div>
-
-          <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-            <span className="text-slate-500 font-medium">Employee ID</span>
-            <span className="font-bold text-slate-900">{attendance.employee.employeeId}</span>
-          </div>
-
-          <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-            <span className="text-slate-500 font-medium">Distance</span>
-            <span className="font-bold text-emerald-600">{attendance.distanceMeters} m from center</span>
+            <span className="text-slate-500 font-medium">Date</span>
+            <span className="font-bold text-slate-900">{attendance.date}</span>
           </div>
 
           <div className="flex justify-between items-center py-1">
-            <span className="text-slate-500 font-medium">GPS Accuracy</span>
-            <span className="font-semibold text-slate-800">{attendance.accuracyMeters} m</span>
+            <span className="text-slate-500 font-medium">Verified Distance</span>
+            <span className="font-bold text-emerald-600">{attendance.distanceMeters} m from center</span>
           </div>
         </div>
 
         <button
-          onClick={() => router.push("/employee")}
+          onClick={() => window.location.reload()}
           className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl text-sm transition shadow-md"
         >
-          Go to Employee Dashboard
+          Submit Another Entry
         </button>
       </div>
     );
   }
 
-  const employee = currentUser?.employee;
   const geofence = validationResult?.geofence;
   const isInside = geofence?.isValid;
 
@@ -287,46 +298,13 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-100">
         <div>
-          <h2 className="text-lg font-bold text-slate-900">Workplace Check-In</h2>
+          <h2 className="text-lg font-bold text-slate-900">Workplace Attendance Form</h2>
           <p className="text-xs text-slate-500">Scan & Geofence Verification</p>
         </div>
         <div className="w-8 h-8 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center">
           <MapPin className="w-4 h-4" />
         </div>
       </div>
-
-      {/* READ-ONLY Employee Details Card */}
-      {employee && (
-        <div className="bg-sky-50/60 border border-sky-100 rounded-xl p-3.5 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-sky-700 flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5" /> Authenticated Employee
-            </span>
-            <span className="text-[11px] font-mono font-bold bg-white px-2 py-0.5 rounded text-sky-800 border border-sky-200">
-              {employee.employeeId}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-sky-200/50">
-            <div>
-              <p className="text-[10px] text-slate-500 uppercase font-medium">Name</p>
-              <p className="font-bold text-slate-900 truncate">{employee.name}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-500 uppercase font-medium">Department</p>
-              <p className="font-semibold text-slate-800 truncate">{employee.departmentName}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-500 uppercase font-medium">Organization</p>
-              <p className="font-semibold text-slate-800 truncate">{employee.organization}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-500 uppercase font-medium">Mobile</p>
-              <p className="font-semibold text-slate-800 truncate">{employee.mobileNumber}</p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Location Status Card */}
       <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
@@ -366,7 +344,7 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
         )}
 
         {locState === "DETECTED" && coords && (
-          <div className="space-y-2.5 text-xs text-slate-700">
+          <div className="space-y-2 text-xs text-slate-700">
             <div className="flex justify-between items-center text-slate-600">
               <span>GPS Status</span>
               <span className="text-emerald-600 font-bold flex items-center gap-1">
@@ -413,7 +391,7 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
                   {geofence.isValid ? (
                     <>
                       <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>Inside authorized area ✓</span>
+                      <span>Inside authorized workplace area ✓</span>
                     </>
                   ) : (
                     <>
@@ -428,49 +406,162 @@ export default function AttendanceCheckInFlow({ token }: AttendanceCheckInFlowPr
         )}
       </div>
 
-      {/* Already Checked In Today Notification */}
-      {validationResult?.alreadyCheckedIn && (
-        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
-          <p className="font-bold flex items-center gap-1 text-amber-900">
-            <Clock className="w-4 h-4" /> Already Checked In Today
-          </p>
-          <p>Attendance has already been marked for today.</p>
-        </div>
-      )}
-
-      {/* Error Message Alert */}
+      {/* Global Error Banner */}
       {validationError && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
-          <p className="font-bold mb-0.5">Check-in Unavailable</p>
+          <p className="font-bold mb-0.5">Submission Error</p>
           <p>{validationError}</p>
         </div>
       )}
 
-      {/* Primary Action Button */}
-      <button
-        onClick={handleCheckIn}
-        disabled={
-          !isInside ||
-          validating ||
-          checkingIn ||
-          validationResult?.alreadyCheckedIn ||
-          locState !== "DETECTED"
-        }
-        className={`w-full py-3.5 rounded-xl font-extrabold text-base tracking-wide shadow-lg transition flex items-center justify-center gap-2 ${
-          isInside && !validationResult?.alreadyCheckedIn && locState === "DETECTED"
-            ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.99]"
-            : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"
-        }`}
-      >
-        {checkingIn ? (
-          <>
-            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            <span>Verifying & Saving...</span>
-          </>
-        ) : (
-          <span>CHECK IN</span>
-        )}
-      </button>
+      {/* DYNAMIC PUBLIC ATTENDANCE FORM (Rendered when inside geofence) */}
+      {isInside && (
+        <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <FileText className="w-4 h-4 text-sky-600" /> Enter Attendance Details
+            </span>
+            <span className="text-[10px] text-slate-400 font-medium">* Required fields</span>
+          </div>
+
+          {formFields.map((field) => {
+            const fieldError = formErrors[field.key];
+            const options: string[] = Array.isArray(field.options) ? (field.options as string[]) : [];
+
+            return (
+              <div key={field.id} className="space-y-1 text-xs">
+                <label className="block font-semibold text-slate-700">
+                  {field.label} {field.required && <span className="text-red-500">*</span>}
+                </label>
+
+                {field.helpText && (
+                  <p className="text-[10px] text-slate-400">{field.helpText}</p>
+                )}
+
+                {/* TEXT / EMAIL / PHONE / NUMBER / DATE */}
+                {["TEXT", "EMAIL", "PHONE", "NUMBER", "DATE"].includes(field.type) && (
+                  <input
+                    type={
+                      field.type === "EMAIL"
+                        ? "email"
+                        : field.type === "NUMBER"
+                        ? "number"
+                        : field.type === "DATE"
+                        ? "date"
+                        : field.type === "PHONE"
+                        ? "tel"
+                        : "text"
+                    }
+                    placeholder={field.placeholder || ""}
+                    value={formData[field.key] || ""}
+                    onChange={(e) => handleInputChange(field.key, e.target.value)}
+                    className={`w-full px-3 py-2 bg-slate-50 border rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-slate-900 ${
+                      fieldError ? "border-red-400 bg-red-50/30" : "border-slate-300"
+                    }`}
+                  />
+                )}
+
+                {/* LONGTEXT / TEXTAREA */}
+                {field.type === "LONGTEXT" && (
+                  <textarea
+                    rows={3}
+                    placeholder={field.placeholder || ""}
+                    value={formData[field.key] || ""}
+                    onChange={(e) => handleInputChange(field.key, e.target.value)}
+                    className={`w-full px-3 py-2 bg-slate-50 border rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-slate-900 ${
+                      fieldError ? "border-red-400 bg-red-50/30" : "border-slate-300"
+                    }`}
+                  />
+                )}
+
+                {/* DROPDOWN / SELECT */}
+                {field.type === "DROPDOWN" && (
+                  <select
+                    value={formData[field.key] || ""}
+                    onChange={(e) => handleInputChange(field.key, e.target.value)}
+                    className={`w-full px-3 py-2 bg-slate-50 border rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-slate-900 ${
+                      fieldError ? "border-red-400 bg-red-50/30" : "border-slate-300"
+                    }`}
+                  >
+                    <option value="">Select option...</option>
+                    {options.map((opt, i) => (
+                      <option key={i} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {/* RADIO BUTTONS */}
+                {field.type === "RADIO" && (
+                  <div className="space-y-1.5 pt-1">
+                    {options.map((opt, i) => (
+                      <label key={i} className="flex items-center gap-2 font-medium text-slate-700 cursor-pointer">
+                        <input
+                          type="radio"
+                          name={field.key}
+                          value={opt}
+                          checked={formData[field.key] === opt}
+                          onChange={(e) => handleInputChange(field.key, e.target.value)}
+                          className="w-4 h-4 text-sky-600"
+                        />
+                        <span>{opt}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {/* CHECKBOXES */}
+                {field.type === "CHECKBOX" && (
+                  <div className="space-y-1.5 pt-1">
+                    {options.map((opt, i) => {
+                      const checked = (formData[field.key] || []).includes(opt);
+                      return (
+                        <label key={i} className="flex items-center gap-2 font-medium text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            value={opt}
+                            checked={checked}
+                            onChange={() => handleCheckboxToggle(field.key, opt)}
+                            className="w-4 h-4 text-sky-600 rounded"
+                          />
+                          <span>{opt}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {fieldError && <p className="text-[11px] text-red-500 font-medium">{fieldError}</p>}
+              </div>
+            );
+          })}
+
+          {/* Privacy Notice */}
+          <div className="pt-2 text-[10px] text-slate-400 text-center leading-relaxed">
+            Your information and GPS location are collected solely for workplace attendance and verification purposes.
+          </div>
+
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={checkingIn}
+            className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-base tracking-wide rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.99]"
+          >
+            {checkingIn ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>Verifying & Submitting...</span>
+              </>
+            ) : (
+              <>
+                <Send className="w-5 h-5" />
+                <span>CHECK IN / SUBMIT</span>
+              </>
+            )}
+          </button>
+        </form>
+      )}
     </div>
   );
 }

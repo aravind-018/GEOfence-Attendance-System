@@ -11,7 +11,6 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const date = searchParams.get("date") || "";
-    const employeeId = searchParams.get("employeeId") || "";
     const search = searchParams.get("search") || "";
     const departmentId = searchParams.get("departmentId") || "";
     const workplaceId = searchParams.get("workplaceId") || "";
@@ -34,21 +33,21 @@ export async function GET(req: NextRequest) {
       whereClause.status = status;
     }
 
-    if (employeeId || search || departmentId) {
-      whereClause.employee = {};
-      if (employeeId) {
-        whereClause.employee.employeeId = { contains: employeeId, mode: "insensitive" };
-      }
-      if (search) {
-        whereClause.employee.OR = [
-          { name: { contains: search, mode: "insensitive" } },
-          { employeeId: { contains: search, mode: "insensitive" } },
-          { email: { contains: search, mode: "insensitive" } },
-        ];
-      }
-      if (departmentId) {
-        whereClause.employee.departmentId = departmentId;
-      }
+    if (search) {
+      whereClause.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { email: { contains: search, mode: "insensitive" } },
+        { employeeCode: { contains: search, mode: "insensitive" } },
+        { departmentName: { contains: search, mode: "insensitive" } },
+        { employee: { name: { contains: search, mode: "insensitive" } } },
+      ];
+    }
+
+    if (departmentId) {
+      whereClause.OR = [
+        { employee: { departmentId } },
+        { departmentName: { contains: departmentId, mode: "insensitive" } },
+      ];
     }
 
     const [attendances, total] = await Promise.all([

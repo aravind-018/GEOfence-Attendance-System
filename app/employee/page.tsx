@@ -15,14 +15,13 @@ export default async function EmployeeDashboardPage() {
   const todayStr = getFormattedTodayDate();
 
   // Fetch today's check-in
-  const todayAttendance = await prisma.attendance.findUnique({
+  const todayAttendance = await prisma.attendance.findFirst({
     where: {
-      employeeId_date: {
-        employeeId: user.employee.id,
-        date: todayStr,
-      },
+      employeeId: user.employee.id,
+      date: todayStr,
     },
     include: { workplace: { select: { name: true } } },
+    orderBy: { checkInTime: "desc" },
   });
 
   // Fetch recent attendance history

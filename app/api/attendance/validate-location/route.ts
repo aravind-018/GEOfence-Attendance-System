@@ -1,27 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
-import { getCurrentUser } from "@/lib/auth/session";
 import { validateLocationSchema } from "@/lib/validation/schemas";
 import { validateGeofence } from "@/lib/geo/haversine";
-import { getFormattedTodayDate } from "@/lib/utils/date";
+import { getOrCreateWorkplaceFormFields } from "@/lib/form/fields";
 
 export async function POST(req: NextRequest) {
   try {
-    const currentUser = await getCurrentUser();
-    if (!currentUser) {
-      return NextResponse.json(
-        { error: "Authentication required", requiresLogin: true },
-        { status: 401 }
-      );
-    }
-
-    if (currentUser.role !== "EMPLOYEE" || !currentUser.employee) {
-      return NextResponse.json(
-        { error: "Only active employees can validate attendance location." },
-        { status: 403 }
-      );
-    }
-
     const body = await req.json();
     const result = validateLocationSchema.safeParse(body);
 
@@ -73,16 +57,9 @@ export async function POST(req: NextRequest) {
       gpsAccuracyMeters,
     });
 
-    // Check if attendance already marked today
-    const todayDateStr = getFormattedTodayDate();
-    const existingAttendance = await prisma.attendance.findUnique({
-      where: {
-        employeeId_date: {
-          employeeId: currentUser.employee.id,
-          date: todayDateStr,
-        },
-      },
-    });
+    // Fetch active form fields configured for this workplace
+    const allFields = await getOrCreateWorkplaceFormFields(workplace.id);
+    const activeFormFields = allFields.filter((f) => f.active);
 
     return NextResponse.json({
       success: true,
@@ -92,15 +69,8 @@ export async function POST(req: NextRequest) {
         radiusMeters: workplace.radiusMeters,
         maxGpsAccuracyMeters: workplace.maxGpsAccuracyMeters,
       },
-      employee: currentUser.employee,
       geofence: geofenceResult,
-      alreadyCheckedIn: !!existingAttendance,
-      existingAttendance: existingAttendance
-        ? {
-            checkInTime: existingAttendance.checkInTime,
-            status: existingAttendance.status,
-          }
-        : null,
+      formFields: activeFormFields,
     });
   } catch (error) {
     console.error("Validate Location API Error:", error);

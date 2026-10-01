@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Plus, Edit, Trash2, MapPin, QrCode, Shield, CheckCircle, XCircle, X } from "lucide-react";
+import { Plus, Edit, Trash2, MapPin, QrCode, Shield, CheckCircle, XCircle, X, FileText } from "lucide-react";
 import MapPicker from "@/components/MapPicker";
 import Link from "next/link";
 
@@ -231,12 +231,21 @@ export default function AdminWorkplacesPage() {
 
               {/* Actions */}
               <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                <Link
-                  href="/admin/qr-codes"
-                  className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center gap-1.5 hover:underline"
-                >
-                  <QrCode className="w-4 h-4" /> Manage QR Code
-                </Link>
+                <div className="flex items-center gap-3">
+                  <Link
+                    href={`/admin/workplaces/${wp.id}/form`}
+                    className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 hover:underline"
+                  >
+                    <FileText className="w-4 h-4" /> Attendance Form
+                  </Link>
+
+                  <Link
+                    href="/admin/qr-codes"
+                    className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center gap-1.5 hover:underline"
+                  >
+                    <QrCode className="w-4 h-4" /> QR Code
+                  </Link>
+                </div>
 
                 <div className="flex items-center gap-1">
                   <button

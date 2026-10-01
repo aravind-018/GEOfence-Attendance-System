@@ -1,50 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getCurrentUser } from "@/lib/auth/session";
-import { checkInSchema } from "@/lib/validation/schemas";
 import { validateGeofence } from "@/lib/geo/haversine";
 import { getFormattedTodayDate } from "@/lib/utils/date";
+import { getOrCreateWorkplaceFormFields } from "@/lib/form/fields";
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Authenticate user
-    const currentUser = await getCurrentUser();
-    if (!currentUser) {
-      return NextResponse.json(
-        { error: "Authentication required to mark attendance.", requiresLogin: true },
-        { status: 401 }
-      );
-    }
-
-    // 2. Verify EMPLOYEE role & active profile
-    if (currentUser.role !== "EMPLOYEE" || !currentUser.employee) {
-      return NextResponse.json(
-        { error: "Only active employees can check in." },
-        { status: 403 }
-      );
-    }
-
-    if (currentUser.employee.status !== "ACTIVE") {
-      return NextResponse.json(
-        { error: "Your employee account is currently inactive." },
-        { status: 403 }
-      );
-    }
-
-    // 3. Input validation
     const body = await req.json();
-    const result = checkInSchema.safeParse(body);
+    const { token, latitude, longitude, gpsAccuracyMeters, formData } = body || {};
 
-    if (!result.success) {
+    if (!token || typeof latitude !== "number" || typeof longitude !== "number") {
       return NextResponse.json(
-        { error: "Invalid request data", details: result.error.flatten() },
+        { error: "Invalid request payload. Token and valid GPS coordinates are required." },
         { status: 400 }
       );
     }
 
-    const { token, latitude, longitude, gpsAccuracyMeters } = result.data;
+    // Optional user check if currently logged in
+    const currentUser = await getCurrentUser();
+    const loggedInEmployeeId = currentUser?.role === "EMPLOYEE" ? currentUser.employee?.id : null;
 
-    // 4. Resolve QR Token & Workplace
+    // 1. Resolve QR Token & Workplace
     const qrCode = await prisma.workplaceQRCode.findUnique({
       where: { token },
       include: { workplace: true },
@@ -67,12 +44,12 @@ export async function POST(req: NextRequest) {
     const workplace = qrCode.workplace;
     if (!workplace || workplace.status !== "ACTIVE") {
       return NextResponse.json(
-        { error: "Workplace is inactive." },
+        { error: "Workplace is currently inactive." },
         { status: 400 }
       );
     }
 
-    // 5. Server-side Geofence Validation
+    // 2. Server-side Geofence Validation
     const geofenceResult = validateGeofence({
       workplaceLat: workplace.latitude,
       workplaceLon: workplace.longitude,
@@ -80,7 +57,7 @@ export async function POST(req: NextRequest) {
       maxGpsAccuracyMeters: workplace.maxGpsAccuracyMeters,
       employeeLat: latitude,
       employeeLon: longitude,
-      gpsAccuracyMeters,
+      gpsAccuracyMeters: gpsAccuracyMeters || 0,
     });
 
     if (!geofenceResult.isValid) {
@@ -94,110 +71,134 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 6. Date uniqueness check (Asia/Kolkata timezone string)
-    const todayDateStr = getFormattedTodayDate();
+    // 3. Server-side Dynamic Form Fields Validation
+    const allFields = await getOrCreateWorkplaceFormFields(workplace.id);
+    const activeFormFields = allFields.filter((f) => f.active);
 
-    // Check duplicate before write
-    const existingAttendance = await prisma.attendance.findUnique({
-      where: {
-        employeeId_date: {
-          employeeId: currentUser.employee.id,
-          date: todayDateStr,
-        },
-      },
-    });
+    const submissionData: Record<string, any> = formData || {};
+    const validationErrors: string[] = [];
 
-    if (existingAttendance) {
+    for (const field of activeFormFields) {
+      const value = submissionData[field.key];
+
+      // Check required
+      if (field.required) {
+        if (
+          value === undefined ||
+          value === null ||
+          (typeof value === "string" && value.trim() === "") ||
+          (Array.isArray(value) && value.length === 0)
+        ) {
+          validationErrors.push(`Field "${field.label}" is required.`);
+          continue;
+        }
+      }
+
+      // Check field types if value is provided
+      if (value !== undefined && value !== null && value !== "") {
+        const valStr = String(value).trim();
+
+        if (field.type === "EMAIL") {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(valStr)) {
+            validationErrors.push(`"${field.label}" must be a valid email address.`);
+          }
+        } else if (field.type === "PHONE") {
+          const phoneClean = valStr.replace(/[\s\-\+\(\)]/g, "");
+          if (phoneClean.length < 7 || isNaN(Number(phoneClean))) {
+            validationErrors.push(`"${field.label}" must be a valid phone number.`);
+          }
+        } else if (field.type === "NUMBER") {
+          if (isNaN(Number(valStr))) {
+            validationErrors.push(`"${field.label}" must be a valid number.`);
+          }
+        } else if (field.type === "DROPDOWN" || field.type === "RADIO") {
+          const allowedOptions = Array.isArray(field.options) ? (field.options as string[]) : [];
+          if (allowedOptions.length > 0 && !allowedOptions.includes(valStr)) {
+            validationErrors.push(`Invalid option selected for "${field.label}".`);
+          }
+        } else if (field.type === "CHECKBOX") {
+          const allowedOptions = Array.isArray(field.options) ? (field.options as string[]) : [];
+          const selectedList = Array.isArray(value) ? value : [valStr];
+          if (allowedOptions.length > 0) {
+            for (const item of selectedList) {
+              if (!allowedOptions.includes(String(item))) {
+                validationErrors.push(`Invalid option selected for "${field.label}".`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (validationErrors.length > 0) {
       return NextResponse.json(
-        {
-          error: "Attendance has already been marked for today.",
-          alreadyMarked: true,
-          attendance: {
-            id: existingAttendance.id,
-            checkInTime: existingAttendance.checkInTime,
-            status: existingAttendance.status,
-          },
-        },
-        { status: 409 }
+        { error: validationErrors[0], details: validationErrors },
+        { status: 400 }
       );
     }
 
-    const employeeObj = currentUser.employee;
-    const empId = employeeObj.id;
+    // 4. Save Attendance Submission
+    const todayDateStr = getFormattedTodayDate();
 
-    // 7. Atomic transaction write
-    const newAttendance = await prisma.$transaction(async (tx) => {
-      // Re-verify uniqueness inside transaction
-      const doubleCheck = await tx.attendance.findUnique({
-        where: {
-          employeeId_date: {
-            employeeId: empId,
-            date: todayDateStr,
-          },
-        },
-      });
+    // Extract standard top-level fields for convenience
+    const submittedName =
+      submissionData.fullName || submissionData.name || currentUser?.employee?.name || "Public Attendee";
+    const submittedEmail =
+      submissionData.email || currentUser?.employee?.email || null;
+    const submittedMobile =
+      submissionData.mobileNumber || submissionData.mobile || currentUser?.employee?.mobileNumber || null;
+    const submittedDept =
+      submissionData.departmentName || submissionData.department || currentUser?.employee?.departmentName || null;
+    const submittedOrg =
+      submissionData.organization || currentUser?.employee?.organization || null;
+    const submittedEmpCode =
+      submissionData.employeeCode || submissionData.employeeId || currentUser?.employee?.employeeId || null;
 
-      if (doubleCheck) {
-        throw new Error("ALREADY_MARKED");
-      }
-
-      return tx.attendance.create({
-        data: {
-          employeeId: empId,
-          workplaceId: workplace.id,
-          date: todayDateStr,
-          checkInTime: new Date(),
-          latitude,
-          longitude,
-          gpsAccuracyMeters,
-          distanceFromWorkplaceMeters: geofenceResult.distanceMeters,
-          qrCodeId: qrCode.id,
-          status: "PRESENT",
-        },
-        include: {
-          workplace: { select: { name: true } },
-          employee: {
-            select: {
-              employeeId: true,
-              name: true,
-              organization: true,
-              department: { select: { name: true } },
-            },
-          },
-        },
-      });
+    const newAttendance = await prisma.attendance.create({
+      data: {
+        employeeId: loggedInEmployeeId,
+        workplaceId: workplace.id,
+        date: todayDateStr,
+        checkInTime: new Date(),
+        latitude,
+        longitude,
+        gpsAccuracyMeters: geofenceResult.gpsAccuracyMeters,
+        distanceFromWorkplaceMeters: geofenceResult.distanceMeters,
+        qrCodeId: qrCode.id,
+        status: "PRESENT",
+        name: submittedName,
+        email: submittedEmail,
+        mobileNumber: submittedMobile,
+        departmentName: submittedDept,
+        organization: submittedOrg,
+        employeeCode: submittedEmpCode,
+        formData: submissionData,
+      },
+      include: {
+        workplace: { select: { name: true } },
+      },
     });
 
     return NextResponse.json({
       success: true,
-      message: "Attendance marked successfully!",
+      message: "Attendance recorded successfully!",
       attendance: {
         id: newAttendance.id,
-        checkInTime: newAttendance.checkInTime,
-        date: newAttendance.date,
         workplaceName: newAttendance.workplace.name,
+        name: newAttendance.name,
+        date: newAttendance.date,
+        checkInTime: newAttendance.checkInTime,
         distanceMeters: newAttendance.distanceFromWorkplaceMeters,
         accuracyMeters: newAttendance.gpsAccuracyMeters,
         status: newAttendance.status,
-        employee: {
-          employeeId: newAttendance.employee.employeeId,
-          name: newAttendance.employee.name,
-          department: newAttendance.employee.department.name,
-          organization: newAttendance.employee.organization,
-        },
       },
     });
   } catch (error: any) {
-    if (error?.message === "ALREADY_MARKED" || error?.code === "P2002") {
-      return NextResponse.json(
-        { error: "Attendance has already been marked for today." },
-        { status: 409 }
-      );
-    }
-
     console.error("Check-In API Error:", error);
     return NextResponse.json(
-      { error: "Failed to process check-in due to a server error." },
+      { error: "Failed to save attendance submission due to a server error." },
       { status: 500 }
     );
   }
